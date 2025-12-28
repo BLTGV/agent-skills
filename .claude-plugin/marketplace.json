@@ -1,14 +1,14 @@
 {
-  "name": "api-skills",
-  "displayName": "API Skills",
-  "description": "Skills for connecting to external APIs with guided access scripts. Currently supports Microsoft Graph (emails, calendar) with Notion coming soon.",
-  "version": "0.1.0",
-  "author": {
-    "name": "Casey Benko",
-    "email": "casey.benko@bltgv.com"
-  },
-  "repository": "https://github.com/BLTGV/agent-skills",
-  "categories": ["integration", "productivity"],
-  "keywords": ["api", "microsoft-graph", "outlook", "calendar", "email", "notion"],
-  "license": "MIT"
+  "owner": "BLTGV",
+  "plugins": [
+    {
+      "name": "api-skills",
+      "displayName": "API Skills",
+      "description": "Skills for connecting to external APIs with guided access scripts. Currently supports Microsoft Graph (emails, calendar) with Notion coming soon.",
+      "version": "0.1.0",
+      "repository": "https://github.com/BLTGV/agent-skills",
+      "categories": ["integration", "productivity"],
+      "keywords": ["api", "microsoft-graph", "outlook", "calendar", "email", "notion"]
+    }
+  ]
 }

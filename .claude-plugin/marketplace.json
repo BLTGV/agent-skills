@@ -15,7 +15,7 @@
         "name": "Casey Benko",
         "email": "casey.benko@bltgv.com"
       },
-      "source": ".",
+      "source": "./",
       "category": "integration",
       "homepage": "https://github.com/BLTGV/agent-skills"
     }

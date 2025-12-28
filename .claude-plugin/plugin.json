@@ -1,0 +1,9 @@
+{
+  "name": "api-skills",
+  "version": "0.1.0",
+  "description": "Skills for connecting to external APIs with guided access scripts",
+  "author": {
+    "name": "Casey"
+  },
+  "keywords": ["api", "microsoft-graph", "notion", "integration"]
+}

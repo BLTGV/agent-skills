@@ -1,14 +1,23 @@
 {
-  "owner": "BLTGV",
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "bltgv-plugins",
+  "description": "BLTGV Claude Code plugins for API integrations",
+  "owner": {
+    "name": "BLTGV",
+    "email": "casey.benko@bltgv.com"
+  },
   "plugins": [
     {
       "name": "api-skills",
-      "displayName": "API Skills",
       "description": "Skills for connecting to external APIs with guided access scripts. Currently supports Microsoft Graph (emails, calendar) with Notion coming soon.",
       "version": "0.1.0",
-      "repository": "https://github.com/BLTGV/agent-skills",
-      "categories": ["integration", "productivity"],
-      "keywords": ["api", "microsoft-graph", "outlook", "calendar", "email", "notion"]
+      "author": {
+        "name": "Casey Benko",
+        "email": "casey.benko@bltgv.com"
+      },
+      "source": ".",
+      "category": "integration",
+      "homepage": "https://github.com/BLTGV/agent-skills"
     }
   ]
 }

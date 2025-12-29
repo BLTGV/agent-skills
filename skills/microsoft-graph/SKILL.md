@@ -76,7 +76,10 @@ When running email or calendar commands, if authentication fails, use this recov
 
    If status is `"valid"`, proceed with commands normally.
 
-2. **If status is `"needs-auth"`, start device code flow:**
+2. **If status is `"needs-auth"`, start device code flow.**
+
+   **IMPORTANT:** Do NOT run this in the background. The script exits immediately with `--no-wait` and outputs JSON that MUST be shown to the user.
+
    ```bash
    bun run ${CLAUDE_PLUGIN_ROOT}/skills/microsoft-graph/scripts/auth.ts --json --no-wait
    ```
@@ -86,7 +89,7 @@ When running email or calendar commands, if authentication fails, use this recov
    {"userCode":"ABC123","verificationUri":"https://microsoft.com/devicelogin","expiresIn":900,"message":"..."}
    ```
 
-3. **Display to user** using the `userCode` and `verificationUri` from the JSON:
+3. **IMMEDIATELY display to user** the `userCode` and `verificationUri` from the JSON output:
    ```
    To access your email, please authenticate:
    1. Go to: https://microsoft.com/devicelogin

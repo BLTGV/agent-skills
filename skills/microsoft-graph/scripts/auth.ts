@@ -2,7 +2,12 @@
 /**
  * Microsoft Graph Authentication Script
  *
- * Authenticates with Microsoft Graph API using device code flow.
+ * Manual authentication and credential management.
+ * Note: For normal use, authentication is handled automatically by
+ * emails.ts and calendar.ts - this script is only needed for:
+ * - Listing credential profiles
+ * - Deleting credential profiles
+ * - Interactive authentication with custom Azure AD apps
  *
  * Usage:
  *   bun run auth.ts [--profile <name>] [--client-id <id>] [--tenant-id <id>]
@@ -14,34 +19,26 @@
  *   --scopes      Comma-separated list of scopes (default: all scopes)
  *   --list        List all stored credential profiles
  *   --delete      Delete a credential profile
- *   --json        Output device code as JSON (for automation)
- *   --no-wait     Output device code and exit immediately (don't wait for completion)
  *
  * Examples:
- *   bun run auth.ts
- *   bun run auth.ts --profile work
- *   bun run auth.ts --client-id your-app-id --tenant-id your-tenant-id
- *   bun run auth.ts --profile work --client-id your-app-id
  *   bun run auth.ts --list
  *   bun run auth.ts --delete --profile old-account
- *   bun run auth.ts --json --no-wait
+ *   bun run auth.ts --client-id your-app-id --tenant-id your-tenant-id
  */
 
 import { parseArgs } from "util";
 import { PublicClientApplication } from "@azure/msal-node";
-import { GraphClient, GRAPH_SCOPES } from "./lib/graph-client";
+import { GRAPH_SCOPES } from "./lib/graph-client";
 import {
   listProfiles,
   getCredential,
+  setCredential,
   deleteCredential,
 } from "./lib/credentials";
+import type { Credential } from "./lib/types";
 
-interface DeviceCodeInfo {
-  userCode: string;
-  verificationUri: string;
-  expiresIn: number;
-  message: string;
-}
+const DEFAULT_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e";
+const DEFAULT_TENANT = "common";
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -52,8 +49,6 @@ const { values } = parseArgs({
     scopes: { type: "string" },
     list: { type: "boolean", default: false },
     delete: { type: "boolean", default: false },
-    json: { type: "boolean", default: false },
-    "no-wait": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -72,9 +67,11 @@ Options:
   --scopes <scopes>     Comma-separated list of scopes
   --list                List all stored credential profiles
   --delete              Delete a credential profile
-  --json                Output device code as JSON (for automation)
-  --no-wait             Output device code and exit immediately (don't wait for completion)
   -h, --help            Show this help message
+
+Note:
+  For normal email and calendar access, authentication is handled automatically.
+  This script is only needed for managing profiles or using custom Azure AD apps.
 
 Using Your Own App Registration:
   1. Go to https://portal.azure.com
@@ -93,26 +90,17 @@ Using Your Own App Registration:
   7. Use it with: --client-id your-app-id
 
 Examples:
-  # Authenticate with default (Graph Explorer) client
-  bun run auth.ts
-
-  # Authenticate with your own app
-  bun run auth.ts --client-id 12345678-1234-1234-1234-123456789abc
-
-  # Authenticate with single-tenant app
-  bun run auth.ts --client-id your-app-id --tenant-id your-tenant-id
-
-  # Use 'work' profile with custom app
-  bun run auth.ts --profile work --client-id your-app-id
-
   # List all profiles
   bun run auth.ts --list
 
   # Delete a profile
   bun run auth.ts --delete --profile old
 
-  # Non-blocking mode for automation
-  bun run auth.ts --json --no-wait
+  # Authenticate with your own app
+  bun run auth.ts --client-id 12345678-1234-1234-1234-123456789abc
+
+  # Authenticate with single-tenant app
+  bun run auth.ts --client-id your-app-id --tenant-id your-tenant-id
 `);
   process.exit(0);
 }
@@ -122,7 +110,7 @@ async function main() {
     const profiles = await listProfiles("microsoft-graph");
     if (profiles.length === 0) {
       console.log("No credential profiles found.");
-      console.log("Run 'bun run auth.ts' to create one.");
+      console.log("Authentication is handled automatically when using email or calendar scripts.");
     } else {
       console.log("Microsoft Graph credential profiles:\n");
       for (const profile of profiles) {
@@ -138,7 +126,7 @@ async function main() {
           if (cred.tenantId) {
             console.log(`    Tenant ID: ${cred.tenantId}`);
           }
-          console.log(`    Status: ${expired ? "EXPIRED" : "Valid"}`);
+          console.log(`    Token Status: ${expired ? "EXPIRED (will refresh)" : "Valid"}`);
           console.log();
         }
       }
@@ -156,112 +144,64 @@ async function main() {
     return;
   }
 
-  // Determine scopes
-  let scopes: string[];
-  if (values.scopes) {
-    scopes = values.scopes.split(",").map((s) => s.trim());
+  // Interactive authentication
+  const scopes = values.scopes
+    ? values.scopes.split(",").map((s) => s.trim())
+    : [...GRAPH_SCOPES.user, ...GRAPH_SCOPES.mail, ...GRAPH_SCOPES.calendar];
+
+  const clientId = values["client-id"] ?? DEFAULT_CLIENT_ID;
+  const tenantId = values["tenant-id"] ?? DEFAULT_TENANT;
+
+  console.log(`Authenticating with Microsoft Graph...`);
+  console.log(`Profile: ${values.profile}`);
+  if (values["client-id"]) {
+    console.log(`Client ID: ${clientId}`);
   } else {
-    // Request all available scopes
-    scopes = [
-      ...GRAPH_SCOPES.user,
-      ...GRAPH_SCOPES.mail,
-      ...GRAPH_SCOPES.calendar,
-    ];
+    console.log(`Client ID: (using default Graph Explorer client)`);
   }
-
-  const clientId = values["client-id"] ?? "14d82eec-204b-4c2f-b7e8-296a70dab67e";
-  const tenantId = values["tenant-id"] ?? "common";
-
-  if (!values.json) {
-    console.log(`Authenticating with Microsoft Graph...`);
-    console.log(`Profile: ${values.profile}`);
-    if (values["client-id"]) {
-      console.log(`Client ID: ${clientId}`);
-    } else {
-      console.log(`Client ID: (using default Graph Explorer client)`);
-    }
-    if (values["tenant-id"]) {
-      console.log(`Tenant ID: ${tenantId}`);
-    }
-    console.log(`Scopes: ${scopes.join(", ")}\n`);
+  if (values["tenant-id"]) {
+    console.log(`Tenant ID: ${tenantId}`);
   }
+  console.log(`Scopes: ${scopes.join(", ")}\n`);
 
   try {
-    if (values["no-wait"]) {
-      // Non-blocking mode: output device code and exit
-      const pca = new PublicClientApplication({
-        auth: {
-          clientId,
-          authority: `https://login.microsoftonline.com/${tenantId}`,
-        },
-      });
+    const pca = new PublicClientApplication({
+      auth: {
+        clientId,
+        authority: `https://login.microsoftonline.com/${tenantId}`,
+      },
+    });
 
-      // Start device code flow but don't wait for completion
-      const deviceCodeRequest = {
-        scopes,
-        deviceCodeCallback: (response: any) => {
-          const deviceInfo: DeviceCodeInfo = {
-            userCode: response.userCode,
-            verificationUri: response.verificationUri,
-            expiresIn: response.expiresIn,
-            message: response.message,
-          };
+    const result = await pca.acquireTokenByDeviceCode({
+      scopes,
+      deviceCodeCallback: (response) => {
+        console.log(`\nTo authenticate, please:`);
+        console.log(`1. Go to: ${response.verificationUri}`);
+        console.log(`2. Enter code: ${response.userCode}`);
+        console.log(`\nWaiting for authentication...`);
+      },
+    });
 
-          if (values.json) {
-            console.log(JSON.stringify(deviceInfo));
-          } else {
-            console.log(`\nTo authenticate, please:`);
-            console.log(`1. Go to: ${response.verificationUri}`);
-            console.log(`2. Enter code: ${response.userCode}`);
-            console.log(`\nCode expires in ${Math.round(response.expiresIn / 60)} minutes.`);
-          }
-
-          // Exit immediately after showing the code
-          process.exit(0);
-        },
+    if (result) {
+      const credential: Credential = {
+        accessToken: result.accessToken,
+        refreshToken: (result as any).refreshToken ?? "",
+        expiresAt: result.expiresOn?.toISOString() ?? new Date(Date.now() + 3600000).toISOString(),
+        account: result.account?.username ?? "unknown",
+        scopes: result.scopes?.length > 0 ? result.scopes : scopes,
+        clientId: values["client-id"] ? clientId : undefined,
+        tenantId: values["tenant-id"] ? tenantId : undefined,
       };
 
-      // This will trigger the callback and we'll exit from there
-      pca.acquireTokenByDeviceCode(deviceCodeRequest);
+      await setCredential("microsoft-graph", values.profile!, credential);
 
-      // Keep the process alive briefly to allow callback to fire
-      await new Promise(resolve => setTimeout(resolve, 5000));
-
-    } else {
-      // Normal blocking mode
-      const client = new GraphClient({
-        profile: values.profile,
-        clientId: values["client-id"],
-        tenantId: values["tenant-id"],
-      });
-
-      const result = await client.authenticate(scopes);
-
-      if (values.json) {
-        console.log(JSON.stringify({
-          status: "success",
-          account: result.account?.username,
-          expiresAt: result.expiresOn?.toISOString(),
-        }));
-      } else {
-        console.log("\n✓ Authentication successful!");
-        console.log(`  Account: ${result.account?.username}`);
-        console.log(`  Expires: ${result.expiresOn?.toLocaleString()}`);
-        if (values["client-id"]) {
-          console.log(`  Client ID saved for future use`);
-        }
-        console.log(`\nCredentials saved to profile: ${values.profile}`);
-      }
+      console.log("\nAuthentication successful!");
+      console.log(`  Account: ${credential.account}`);
+      console.log(`  Expires: ${new Date(credential.expiresAt).toLocaleString()}`);
+      console.log(`\nCredentials saved to profile: ${values.profile}`);
     }
   } catch (error) {
-    if (values.json) {
-      console.log(JSON.stringify({
-        status: "error",
-        error: error instanceof Error ? error.message : "Unknown error",
-      }));
-    } else {
-      console.error("Authentication failed:", error);
-    }
+    console.error("Authentication failed:", error);
     process.exit(1);
   }
 }

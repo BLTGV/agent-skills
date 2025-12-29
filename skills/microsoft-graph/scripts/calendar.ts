@@ -3,6 +3,7 @@
  * Microsoft Graph Calendar Script
  *
  * View and search calendar events from Microsoft Graph API.
+ * Authentication is handled automatically - if needed, returns auth instructions.
  *
  * Usage:
  *   bun run calendar.ts <command> [options]
@@ -21,19 +22,17 @@
  *   --end        End date (ISO format or relative: +7d, +1m)
  *   --query      Search query for 'search' command
  *   --id         Event ID for 'view' command
- *   --format     Output format: json, text (default: text)
  *
- * Examples:
- *   bun run calendar.ts list
- *   bun run calendar.ts today
- *   bun run calendar.ts week
- *   bun run calendar.ts list --start tomorrow --end +7d
- *   bun run calendar.ts search --query "team meeting"
- *   bun run calendar.ts view --id AAMkAG...
+ * Output:
+ *   Always JSON with structure:
+ *   - Success: { "status": "success", "data": [...] }
+ *   - Auth needed: { "status": "auth_required", "userCode": "...", "verificationUri": "..." }
+ *   - Error: { "status": "error", "error": "..." }
  */
 
 import { parseArgs } from "util";
-import { GraphClient, GRAPH_SCOPES } from "./lib/graph-client";
+import { GRAPH_SCOPES } from "./lib/graph-client";
+import { ensureAuth, type ScriptResponse } from "./lib/auth-handler";
 import type { GraphCalendarEvent } from "./lib/types";
 
 const { values, positionals } = parseArgs({
@@ -45,7 +44,6 @@ const { values, positionals } = parseArgs({
     end: { type: "string" },
     query: { type: "string" },
     id: { type: "string" },
-    format: { type: "string", default: "text" },
     help: { type: "boolean", short: "h", default: false },
   },
   allowPositionals: true,
@@ -74,8 +72,10 @@ Options:
   --end <date>        End date (ISO format or: +7d, +1m, +1y)
   --query <q>         Search query (for 'search' command)
   --id <id>           Event ID (for 'view' command)
-  --format <fmt>      Output format: json, text (default: text)
   -h, --help          Show this help message
+
+Output:
+  JSON with status field indicating success, auth_required, auth_pending, or error.
 
 Date Examples:
   --start today --end +7d          Next 7 days
@@ -91,6 +91,29 @@ Examples:
   bun run calendar.ts view --id AAMkAG...
 `);
   process.exit(0);
+}
+
+function output<T>(response: ScriptResponse<T>): void {
+  console.log(JSON.stringify(response));
+  process.exit(response.status === "success" ? 0 : 1);
+}
+
+async function graphRequest<T>(token: string, endpoint: string): Promise<T> {
+  const url = `https://graph.microsoft.com/v1.0${endpoint}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Graph API error: ${response.status} - ${error}`);
+  }
+
+  return response.json();
 }
 
 function parseDate(input: string, baseDate: Date = new Date()): Date {
@@ -132,47 +155,39 @@ function parseDate(input: string, baseDate: Date = new Date()): Date {
   return new Date(input);
 }
 
-function formatEvent(event: GraphCalendarEvent, full: boolean = false): string {
-  const start = new Date(event.start.dateTime + "Z");
-  const end = new Date(event.end.dateTime + "Z");
-
-  const dateStr = event.isAllDay
-    ? start.toLocaleDateString()
-    : `${start.toLocaleString()} - ${end.toLocaleTimeString()}`;
-
-  let output = `${event.subject}
-  When: ${dateStr}${event.isAllDay ? " (All Day)" : ""}`;
-
-  if (event.location?.displayName) {
-    output += `\n  Where: ${event.location.displayName}`;
-  }
-
-  if (event.organizer) {
-    output += `\n  Organizer: ${event.organizer.emailAddress.name} <${event.organizer.emailAddress.address}>`;
-  }
-
-  output += `\n  ID: ${event.id}`;
-
-  if (full) {
-    if (event.attendees && event.attendees.length > 0) {
-      output += `\n  Attendees:`;
-      for (const attendee of event.attendees) {
-        const status = attendee.status?.response || "none";
-        output += `\n    - ${attendee.emailAddress.name} <${attendee.emailAddress.address}> (${status})`;
-      }
-    }
-
-    if (event.bodyPreview) {
-      output += `\n\n--- Description ---\n${event.bodyPreview}`;
-    }
-  }
-
-  return output;
+function formatEventData(event: GraphCalendarEvent) {
+  return {
+    id: event.id,
+    subject: event.subject,
+    start: event.start,
+    end: event.end,
+    isAllDay: event.isAllDay ?? false,
+    location: event.location?.displayName ?? null,
+    organizer: event.organizer?.emailAddress ?? null,
+    attendees: event.attendees?.map((a) => ({
+      email: a.emailAddress,
+      status: a.status?.response ?? null,
+    })) ?? [],
+    bodyPreview: event.bodyPreview ?? null,
+  };
 }
 
 async function main() {
-  const client = new GraphClient({ profile: values.profile });
-  const scopes = [...GRAPH_SCOPES.user, ...GRAPH_SCOPES.calendar];
+  const requiredScopes = [...GRAPH_SCOPES.user, ...GRAPH_SCOPES.calendar];
+
+  // Ensure we're authenticated
+  const auth = await ensureAuth({
+    service: "microsoft-graph",
+    profile: values.profile!,
+    requiredScopes,
+  });
+
+  if (!auth.ok) {
+    output(auth.response);
+    return;
+  }
+
+  const token = auth.token;
   const top = parseInt(values.top!, 10);
 
   // Determine date range based on command
@@ -209,82 +224,64 @@ async function main() {
         const startISO = startDate.toISOString();
         const endISO = endDate.toISOString();
 
-        const response = await client.graphRequest<{ value: GraphCalendarEvent[] }>(
-          `/me/calendarView?startDateTime=${startISO}&endDateTime=${endISO}&$top=${top}&$orderby=start/dateTime`,
-          scopes
+        const response = await graphRequest<{ value: GraphCalendarEvent[] }>(
+          token,
+          `/me/calendarView?startDateTime=${startISO}&endDateTime=${endISO}&$top=${top}&$orderby=start/dateTime`
         );
 
-        if (values.format === "json") {
-          console.log(JSON.stringify(response.value, null, 2));
-        } else {
-          const rangeStr =
-            command === "today"
-              ? "Today"
-              : command === "week"
-              ? "This Week"
-              : `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`;
-
-          console.log(`Calendar Events (${rangeStr}) - ${response.value.length} results:\n`);
-          for (const event of response.value) {
-            console.log(formatEvent(event));
-            console.log();
-          }
-        }
+        output({
+          status: "success",
+          data: response.value.map(formatEventData),
+        });
         break;
       }
 
       case "view": {
         if (!values.id) {
-          console.error("Error: --id is required for 'view' command");
-          process.exit(1);
+          output({ status: "error", error: "--id is required for 'view' command" });
+          return;
         }
 
-        const event = await client.graphRequest<GraphCalendarEvent>(
-          `/me/events/${values.id}`,
-          scopes
+        const event = await graphRequest<GraphCalendarEvent>(
+          token,
+          `/me/events/${values.id}`
         );
 
-        if (values.format === "json") {
-          console.log(JSON.stringify(event, null, 2));
-        } else {
-          console.log(formatEvent(event, true));
-        }
+        output({
+          status: "success",
+          data: formatEventData(event),
+        });
         break;
       }
 
       case "search": {
         if (!values.query) {
-          console.error("Error: --query is required for 'search' command");
-          process.exit(1);
+          output({ status: "error", error: "--query is required for 'search' command" });
+          return;
         }
 
         // Use filter instead of search for calendar (search not supported on events)
         const query = values.query.replace(/'/g, "''");
-        const response = await client.graphRequest<{ value: GraphCalendarEvent[] }>(
-          `/me/events?$filter=contains(subject,'${query}')&$top=${top}&$orderby=start/dateTime desc`,
-          scopes
+        const response = await graphRequest<{ value: GraphCalendarEvent[] }>(
+          token,
+          `/me/events?$filter=contains(subject,'${query}')&$top=${top}&$orderby=start/dateTime desc`
         );
 
-        if (values.format === "json") {
-          console.log(JSON.stringify(response.value, null, 2));
-        } else {
-          console.log(`Search results for "${values.query}" (${response.value.length} results):\n`);
-          for (const event of response.value) {
-            console.log(formatEvent(event));
-            console.log();
-          }
-        }
+        output({
+          status: "success",
+          data: response.value.map(formatEventData),
+        });
         break;
       }
 
       default:
-        console.error(`Unknown command: ${command}`);
-        console.error("Run 'bun run calendar.ts --help' for usage");
-        process.exit(1);
+        output({ status: "error", error: `Unknown command: ${command}. Use --help for usage.` });
     }
   } catch (error) {
-    console.error("Error:", error);
-    process.exit(1);
+    output({
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
   }
 }
 

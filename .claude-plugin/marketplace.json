@@ -10,7 +10,7 @@
     {
       "name": "api-skills",
       "description": "Skills for connecting to external APIs with guided access scripts. Currently supports Microsoft Graph (emails, calendar) with Notion coming soon.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "Casey Benko",
         "email": "casey.benko@bltgv.com"

@@ -14,6 +14,8 @@
  *   --scopes      Comma-separated list of scopes (default: all scopes)
  *   --list        List all stored credential profiles
  *   --delete      Delete a credential profile
+ *   --json        Output device code as JSON (for automation)
+ *   --no-wait     Output device code and exit immediately (don't wait for completion)
  *
  * Examples:
  *   bun run auth.ts
@@ -22,15 +24,24 @@
  *   bun run auth.ts --profile work --client-id your-app-id
  *   bun run auth.ts --list
  *   bun run auth.ts --delete --profile old-account
+ *   bun run auth.ts --json --no-wait
  */
 
 import { parseArgs } from "util";
+import { PublicClientApplication } from "@azure/msal-node";
 import { GraphClient, GRAPH_SCOPES } from "./lib/graph-client";
 import {
   listProfiles,
   getCredential,
   deleteCredential,
 } from "./lib/credentials";
+
+interface DeviceCodeInfo {
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  message: string;
+}
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -41,6 +52,8 @@ const { values } = parseArgs({
     scopes: { type: "string" },
     list: { type: "boolean", default: false },
     delete: { type: "boolean", default: false },
+    json: { type: "boolean", default: false },
+    "no-wait": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -59,6 +72,8 @@ Options:
   --scopes <scopes>     Comma-separated list of scopes
   --list                List all stored credential profiles
   --delete              Delete a credential profile
+  --json                Output device code as JSON (for automation)
+  --no-wait             Output device code and exit immediately (don't wait for completion)
   -h, --help            Show this help message
 
 Using Your Own App Registration:
@@ -95,6 +110,9 @@ Examples:
 
   # Delete a profile
   bun run auth.ts --delete --profile old
+
+  # Non-blocking mode for automation
+  bun run auth.ts --json --no-wait
 `);
   process.exit(0);
 }
@@ -151,38 +169,99 @@ async function main() {
     ];
   }
 
-  const clientId = values["client-id"];
-  const tenantId = values["tenant-id"];
+  const clientId = values["client-id"] ?? "14d82eec-204b-4c2f-b7e8-296a70dab67e";
+  const tenantId = values["tenant-id"] ?? "common";
 
-  console.log(`Authenticating with Microsoft Graph...`);
-  console.log(`Profile: ${values.profile}`);
-  if (clientId) {
-    console.log(`Client ID: ${clientId}`);
-  } else {
-    console.log(`Client ID: (using default Graph Explorer client)`);
+  if (!values.json) {
+    console.log(`Authenticating with Microsoft Graph...`);
+    console.log(`Profile: ${values.profile}`);
+    if (values["client-id"]) {
+      console.log(`Client ID: ${clientId}`);
+    } else {
+      console.log(`Client ID: (using default Graph Explorer client)`);
+    }
+    if (values["tenant-id"]) {
+      console.log(`Tenant ID: ${tenantId}`);
+    }
+    console.log(`Scopes: ${scopes.join(", ")}\n`);
   }
-  if (tenantId) {
-    console.log(`Tenant ID: ${tenantId}`);
-  }
-  console.log(`Scopes: ${scopes.join(", ")}\n`);
-
-  const client = new GraphClient({
-    profile: values.profile,
-    clientId,
-    tenantId,
-  });
 
   try {
-    const result = await client.authenticate(scopes);
-    console.log("\n✓ Authentication successful!");
-    console.log(`  Account: ${result.account?.username}`);
-    console.log(`  Expires: ${result.expiresOn?.toLocaleString()}`);
-    if (clientId) {
-      console.log(`  Client ID saved for future use`);
+    if (values["no-wait"]) {
+      // Non-blocking mode: output device code and exit
+      const pca = new PublicClientApplication({
+        auth: {
+          clientId,
+          authority: `https://login.microsoftonline.com/${tenantId}`,
+        },
+      });
+
+      // Start device code flow but don't wait for completion
+      const deviceCodeRequest = {
+        scopes,
+        deviceCodeCallback: (response: any) => {
+          const deviceInfo: DeviceCodeInfo = {
+            userCode: response.userCode,
+            verificationUri: response.verificationUri,
+            expiresIn: response.expiresIn,
+            message: response.message,
+          };
+
+          if (values.json) {
+            console.log(JSON.stringify(deviceInfo));
+          } else {
+            console.log(`\nTo authenticate, please:`);
+            console.log(`1. Go to: ${response.verificationUri}`);
+            console.log(`2. Enter code: ${response.userCode}`);
+            console.log(`\nCode expires in ${Math.round(response.expiresIn / 60)} minutes.`);
+          }
+
+          // Exit immediately after showing the code
+          process.exit(0);
+        },
+      };
+
+      // This will trigger the callback and we'll exit from there
+      pca.acquireTokenByDeviceCode(deviceCodeRequest);
+
+      // Keep the process alive briefly to allow callback to fire
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+    } else {
+      // Normal blocking mode
+      const client = new GraphClient({
+        profile: values.profile,
+        clientId: values["client-id"],
+        tenantId: values["tenant-id"],
+      });
+
+      const result = await client.authenticate(scopes);
+
+      if (values.json) {
+        console.log(JSON.stringify({
+          status: "success",
+          account: result.account?.username,
+          expiresAt: result.expiresOn?.toISOString(),
+        }));
+      } else {
+        console.log("\n✓ Authentication successful!");
+        console.log(`  Account: ${result.account?.username}`);
+        console.log(`  Expires: ${result.expiresOn?.toLocaleString()}`);
+        if (values["client-id"]) {
+          console.log(`  Client ID saved for future use`);
+        }
+        console.log(`\nCredentials saved to profile: ${values.profile}`);
+      }
     }
-    console.log(`\nCredentials saved to profile: ${values.profile}`);
   } catch (error) {
-    console.error("Authentication failed:", error);
+    if (values.json) {
+      console.log(JSON.stringify({
+        status: "error",
+        error: error instanceof Error ? error.message : "Unknown error",
+      }));
+    } else {
+      console.error("Authentication failed:", error);
+    }
     process.exit(1);
   }
 }

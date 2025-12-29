@@ -65,6 +65,52 @@ Credentials are stored at `~/.config/api-skills/credentials.json`:
 
 Tokens are automatically refreshed when expired.
 
+### Authentication Recovery Flow
+
+When running email or calendar commands, if authentication fails, use this recovery flow:
+
+1. **Check auth status:**
+   ```bash
+   bun run ${CLAUDE_PLUGIN_ROOT}/skills/microsoft-graph/scripts/check-auth.ts --json
+   ```
+
+   If status is `"valid"`, proceed with commands normally.
+
+2. **If status is `"needs-auth"`, start device code flow:**
+   ```bash
+   bun run ${CLAUDE_PLUGIN_ROOT}/skills/microsoft-graph/scripts/auth.ts --json --no-wait
+   ```
+
+   Output:
+   ```json
+   {"userCode":"ABC123","verificationUri":"https://microsoft.com/devicelogin","expiresIn":900,"message":"..."}
+   ```
+
+3. **Display to user** using the `userCode` and `verificationUri` from the JSON:
+   ```
+   To access your email, please authenticate:
+   1. Go to: https://microsoft.com/devicelogin
+   2. Enter code: ABC123
+
+   Let me know when you've completed authentication.
+   ```
+
+4. **When user confirms, verify:**
+   ```bash
+   bun run ${CLAUDE_PLUGIN_ROOT}/skills/microsoft-graph/scripts/check-auth-complete.ts --json
+   ```
+
+5. **Retry the original command** if authentication is complete.
+
+### Token Lifecycle
+
+| Token Type | Lifetime | Handling |
+|------------|----------|----------|
+| Access Token | ~1 hour | Automatically refreshed using refresh token |
+| Refresh Token | ~90 days | When expired, requires device code flow |
+
+The `check-auth.ts` script attempts silent refresh automatically. Users only need to re-authenticate when the refresh token itself has expired (roughly every 90 days).
+
 ## Email Access
 
 Use `emails.ts` to interact with emails:
@@ -240,6 +286,8 @@ All scripts support `--help` for detailed usage:
 | Script | Purpose |
 |--------|---------|
 | `auth.ts` | OAuth authentication and credential management |
+| `check-auth.ts` | Check auth status and attempt silent refresh |
+| `check-auth-complete.ts` | Verify authentication completed |
 | `emails.ts` | Email list, read, search, and folder operations |
 | `calendar.ts` | Calendar view and search operations |
 

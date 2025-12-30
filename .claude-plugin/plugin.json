@@ -1,6 +1,6 @@
 {
   "name": "api-skills",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Skills for connecting to external APIs with guided access scripts",
   "author": {
     "name": "Casey"

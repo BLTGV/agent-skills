@@ -2,7 +2,7 @@
 /**
  * Microsoft Graph Calendar Script
  *
- * View and search calendar events from Microsoft Graph API.
+ * View, search, and create calendar events via Microsoft Graph API.
  * Authentication is handled automatically - if needed, returns auth instructions.
  *
  * Usage:
@@ -14,14 +14,20 @@
  *   search    Search calendar events
  *   today     Show today's events
  *   week      Show this week's events
+ *   create    Create a new calendar event
  *
  * Options:
  *   --profile    Credential profile (default: "default")
  *   --top        Number of results (default: 10)
- *   --start      Start date (ISO format or relative: today, tomorrow)
- *   --end        End date (ISO format or relative: +7d, +1m)
+ *   --start      Start date/time (ISO format or relative: today, tomorrow)
+ *   --end        End date/time (ISO format or relative: +7d, +1m)
  *   --query      Search query for 'search' command
  *   --id         Event ID for 'view' command
+ *   --subject    Event subject/title for 'create'
+ *   --location   Event location for 'create'
+ *   --body       Event description for 'create'
+ *   --attendees  Attendee emails for 'create' (comma-separated)
+ *   --all-day    Create as all-day event
  *
  * Output:
  *   Always JSON with structure:
@@ -44,6 +50,11 @@ const { values, positionals } = parseArgs({
     end: { type: "string" },
     query: { type: "string" },
     id: { type: "string" },
+    subject: { type: "string" },
+    location: { type: "string" },
+    body: { type: "string" },
+    attendees: { type: "string" },
+    "all-day": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
   allowPositionals: true,
@@ -64,23 +75,30 @@ Commands:
   search    Search calendar events
   today     Show today's events
   week      Show this week's events
+  create    Create a new calendar event
 
 Options:
   --profile <name>    Credential profile (default: "default")
   --top <n>           Number of results (default: 10)
-  --start <date>      Start date (ISO format or: today, tomorrow)
-  --end <date>        End date (ISO format or: +7d, +1m, +1y)
+  --start <date>      Start date/time (ISO format or: today, tomorrow, +1d)
+  --end <date>        End date/time (ISO format or: +7d, +1m, +1y)
   --query <q>         Search query (for 'search' command)
   --id <id>           Event ID (for 'view' command)
+  --subject <text>    Event subject/title (for 'create')
+  --location <text>   Event location (for 'create')
+  --body <text>       Event description (for 'create')
+  --attendees <list>  Attendee emails, comma-separated (for 'create')
+  --all-day           Create as all-day event
   -h, --help          Show this help message
 
 Output:
   JSON with status field indicating success, auth_required, auth_pending, or error.
 
-Date Examples:
-  --start today --end +7d          Next 7 days
+Date/Time Examples:
+  --start today --end +7d                       Next 7 days
   --start 2024-01-01 --end 2024-01-31
   --start tomorrow
+  --start 2024-01-15T14:00:00 --end 2024-01-15T15:00:00
 
 Examples:
   bun run calendar.ts                           # List upcoming events
@@ -89,6 +107,9 @@ Examples:
   bun run calendar.ts list --start tomorrow --end +7d
   bun run calendar.ts search --query "1:1"
   bun run calendar.ts view --id AAMkAG...
+  bun run calendar.ts create --subject "Team Meeting" --start 2024-01-15T14:00:00 --end 2024-01-15T15:00:00
+  bun run calendar.ts create --subject "Review" --start tomorrow --end +1d --attendees "a@ex.com,b@ex.com"
+  bun run calendar.ts create --subject "Holiday" --start 2024-12-25 --all-day
 `);
   process.exit(0);
 }
@@ -114,6 +135,37 @@ async function graphRequest<T>(token: string, endpoint: string): Promise<T> {
   }
 
   return response.json();
+}
+
+async function graphPost<T>(token: string, endpoint: string, body: unknown): Promise<T> {
+  const url = `https://graph.microsoft.com/v1.0${endpoint}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Graph API error: ${response.status} - ${error}`);
+  }
+
+  return response.json();
+}
+
+function parseAttendees(input: string): Array<{ emailAddress: { address: string }; type: string }> {
+  return input
+    .split(",")
+    .map((email) => email.trim())
+    .filter((email) => email.length > 0)
+    .map((address) => ({
+      emailAddress: { address },
+      type: "required",
+    }));
 }
 
 function parseDate(input: string, baseDate: Date = new Date()): Date {
@@ -173,7 +225,13 @@ function formatEventData(event: GraphCalendarEvent) {
 }
 
 async function main() {
-  const requiredScopes = [...GRAPH_SCOPES.user, ...GRAPH_SCOPES.calendar];
+  // Determine required scopes based on command
+  const requiredScopes = [...GRAPH_SCOPES.user];
+  if (command === "create") {
+    requiredScopes.push(...GRAPH_SCOPES.calendarWrite);
+  } else {
+    requiredScopes.push(...GRAPH_SCOPES.calendar);
+  }
 
   // Ensure we're authenticated
   const auth = await ensureAuth({
@@ -270,6 +328,80 @@ async function main() {
         output({
           status: "success",
           data: response.value.map(formatEventData),
+        });
+        break;
+      }
+
+      case "create": {
+        if (!values.subject) {
+          output({ status: "error", error: "--subject is required for 'create' command" });
+          return;
+        }
+        if (!values.start) {
+          output({ status: "error", error: "--start is required for 'create' command" });
+          return;
+        }
+
+        const isAllDay = values["all-day"];
+        const eventStart = parseDate(values.start);
+        const eventEnd = values.end
+          ? parseDate(values.end, eventStart)
+          : isAllDay
+            ? new Date(eventStart.getTime() + 24 * 60 * 60 * 1000) // Next day for all-day
+            : new Date(eventStart.getTime() + 60 * 60 * 1000); // 1 hour default
+
+        // Get timezone
+        const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+        const eventBody: {
+          subject: string;
+          start: { dateTime: string; timeZone: string };
+          end: { dateTime: string; timeZone: string };
+          isAllDay?: boolean;
+          location?: { displayName: string };
+          body?: { contentType: string; content: string };
+          attendees?: Array<{ emailAddress: { address: string }; type: string }>;
+        } = {
+          subject: values.subject,
+          start: {
+            dateTime: isAllDay
+              ? eventStart.toISOString().split("T")[0]
+              : eventStart.toISOString(),
+            timeZone,
+          },
+          end: {
+            dateTime: isAllDay
+              ? eventEnd.toISOString().split("T")[0]
+              : eventEnd.toISOString(),
+            timeZone,
+          },
+        };
+
+        if (isAllDay) {
+          eventBody.isAllDay = true;
+        }
+
+        if (values.location) {
+          eventBody.location = { displayName: values.location };
+        }
+
+        if (values.body) {
+          eventBody.body = { contentType: "Text", content: values.body };
+        }
+
+        if (values.attendees) {
+          eventBody.attendees = parseAttendees(values.attendees);
+        }
+
+        const createdEvent = await graphPost<GraphCalendarEvent>(
+          token,
+          "/me/events",
+          eventBody
+        );
+
+        output({
+          status: "success",
+          data: formatEventData(createdEvent),
         });
         break;
       }

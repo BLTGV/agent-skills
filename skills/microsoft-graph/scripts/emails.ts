@@ -2,7 +2,7 @@
 /**
  * Microsoft Graph Email Script
  *
- * Read, list, and search emails from Microsoft Graph API.
+ * Read, list, search, and send emails via Microsoft Graph API.
  * Authentication is handled automatically - if needed, returns auth instructions.
  *
  * Usage:
@@ -13,6 +13,7 @@
  *   read      Read a specific email by ID
  *   search    Search emails
  *   folders   List mail folders
+ *   send      Send an email
  *
  * Options:
  *   --profile    Credential profile (default: "default")
@@ -20,6 +21,12 @@
  *   --top        Number of results (default: 10)
  *   --query      Search query for 'search' command
  *   --id         Email ID for 'read' command
+ *   --to         Recipient email(s) for 'send' (comma-separated)
+ *   --cc         CC recipient(s) for 'send' (comma-separated)
+ *   --bcc        BCC recipient(s) for 'send' (comma-separated)
+ *   --subject    Email subject for 'send'
+ *   --body       Email body for 'send'
+ *   --html       Send body as HTML (default: plain text)
  *
  * Output:
  *   Always JSON with structure:
@@ -41,6 +48,12 @@ const { values, positionals } = parseArgs({
     top: { type: "string", default: "10" },
     query: { type: "string" },
     id: { type: "string" },
+    to: { type: "string" },
+    cc: { type: "string" },
+    bcc: { type: "string" },
+    subject: { type: "string" },
+    body: { type: "string" },
+    html: { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
   allowPositionals: true,
@@ -60,6 +73,7 @@ Commands:
   read      Read a specific email by ID
   search    Search emails
   folders   List mail folders
+  send      Send an email
 
 Options:
   --profile <name>    Credential profile (default: "default")
@@ -67,6 +81,12 @@ Options:
   --top <n>           Number of results (default: 10)
   --query <q>         Search query (for 'search' command)
   --id <id>           Email ID (for 'read' command)
+  --to <emails>       Recipient email(s), comma-separated (for 'send')
+  --cc <emails>       CC recipient(s), comma-separated (for 'send')
+  --bcc <emails>      BCC recipient(s), comma-separated (for 'send')
+  --subject <text>    Email subject (for 'send')
+  --body <text>       Email body (for 'send')
+  --html              Send body as HTML instead of plain text
   -h, --help          Show this help message
 
 Output:
@@ -85,6 +105,8 @@ Examples:
   bun run emails.ts read --id AAMkAG...
   bun run emails.ts search --query "from:boss@company.com subject:urgent"
   bun run emails.ts folders
+  bun run emails.ts send --to "user@example.com" --subject "Hello" --body "Hi there!"
+  bun run emails.ts send --to "a@ex.com,b@ex.com" --cc "c@ex.com" --subject "Team Update" --body "<h1>Update</h1>" --html
 `);
   process.exit(0);
 }
@@ -112,13 +134,45 @@ async function graphRequest<T>(token: string, endpoint: string): Promise<T> {
   return response.json();
 }
 
+async function graphPost(token: string, endpoint: string, body: unknown): Promise<void> {
+  const url = `https://graph.microsoft.com/v1.0${endpoint}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Graph API error: ${response.status} - ${error}`);
+  }
+}
+
+function parseRecipients(input: string): Array<{ emailAddress: { address: string } }> {
+  return input
+    .split(",")
+    .map((email) => email.trim())
+    .filter((email) => email.length > 0)
+    .map((address) => ({ emailAddress: { address } }));
+}
+
 async function main() {
   if (!command) {
     output({ status: "error", error: "No command specified. Use --help for usage." });
     return;
   }
 
-  const requiredScopes = [...GRAPH_SCOPES.user, ...GRAPH_SCOPES.mail];
+  // Determine required scopes based on command
+  const requiredScopes = [...GRAPH_SCOPES.user];
+  if (command === "send") {
+    requiredScopes.push(...GRAPH_SCOPES.mailSend);
+  } else {
+    requiredScopes.push(...GRAPH_SCOPES.mail);
+  }
 
   // Ensure we're authenticated
   const auth = await ensureAuth({
@@ -228,6 +282,55 @@ async function main() {
             totalItemCount: folder.totalItemCount,
             childFolderCount: folder.childFolderCount,
           })),
+        });
+        break;
+      }
+
+      case "send": {
+        if (!values.to) {
+          output({ status: "error", error: "--to is required for 'send' command" });
+          return;
+        }
+        if (!values.subject) {
+          output({ status: "error", error: "--subject is required for 'send' command" });
+          return;
+        }
+        if (!values.body) {
+          output({ status: "error", error: "--body is required for 'send' command" });
+          return;
+        }
+
+        const message: {
+          subject: string;
+          body: { contentType: string; content: string };
+          toRecipients: Array<{ emailAddress: { address: string } }>;
+          ccRecipients?: Array<{ emailAddress: { address: string } }>;
+          bccRecipients?: Array<{ emailAddress: { address: string } }>;
+        } = {
+          subject: values.subject,
+          body: {
+            contentType: values.html ? "HTML" : "Text",
+            content: values.body,
+          },
+          toRecipients: parseRecipients(values.to),
+        };
+
+        if (values.cc) {
+          message.ccRecipients = parseRecipients(values.cc);
+        }
+        if (values.bcc) {
+          message.bccRecipients = parseRecipients(values.bcc);
+        }
+
+        await graphPost(token, "/me/sendMail", { message });
+
+        output({
+          status: "success",
+          data: {
+            sent: true,
+            to: values.to,
+            subject: values.subject,
+          },
         });
         break;
       }

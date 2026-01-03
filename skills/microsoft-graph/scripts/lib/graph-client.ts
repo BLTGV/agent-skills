@@ -13,7 +13,9 @@ import type { Credential } from "./types";
 // Microsoft Graph API scopes
 export const GRAPH_SCOPES = {
   mail: ["Mail.Read", "Mail.ReadBasic"],
+  mailSend: ["Mail.Send"],
   calendar: ["Calendars.Read"],
+  calendarWrite: ["Calendars.ReadWrite"],
   user: ["User.Read"],
 };
 

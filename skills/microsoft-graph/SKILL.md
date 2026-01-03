@@ -1,7 +1,7 @@
 ---
 name: Microsoft Graph API
-description: This skill should be used when the user asks to "read my emails", "check my calendar", "get calendar events", "search emails", "list mail folders", "show unread messages", "what meetings do I have", "fetch emails from Microsoft", "access Outlook", or mentions Microsoft Graph, Office 365 email, or Outlook calendar integration.
-version: 0.2.0
+description: This skill should be used when the user asks to "read my emails", "send an email", "compose email", "check my calendar", "get calendar events", "create a meeting", "schedule an event", "add calendar event", "search emails", "list mail folders", "show unread messages", "what meetings do I have", "fetch emails from Microsoft", "access Outlook", or mentions Microsoft Graph, Office 365 email, or Outlook calendar integration.
+version: 0.3.0
 ---
 
 # Microsoft Graph API Integration
@@ -11,8 +11,8 @@ Access Microsoft 365 emails and calendar through TypeScript scripts executed via
 ## Overview
 
 This skill provides access to Microsoft Graph API for:
-- **Email**: List, read, and search emails across folders
-- **Calendar**: View and search calendar events
+- **Email**: List, read, search, and send emails
+- **Calendar**: View, search, and create calendar events
 
 All scripts return JSON and handle authentication automatically.
 
@@ -99,6 +99,22 @@ bun run emails.ts search --query "hasAttachments:true"
 bun run emails.ts folders
 ```
 
+### Send Email
+
+```bash
+# Simple email
+bun run emails.ts send --to "user@example.com" --subject "Hello" --body "Hi there!"
+
+# Multiple recipients with CC
+bun run emails.ts send --to "a@example.com,b@example.com" --cc "c@example.com" --subject "Team Update" --body "Here's the update..."
+
+# HTML email
+bun run emails.ts send --to "user@example.com" --subject "Report" --body "<h1>Monthly Report</h1><p>Details...</p>" --html
+
+# With BCC
+bun run emails.ts send --to "team@example.com" --bcc "manager@example.com" --subject "Announcement" --body "..."
+```
+
 ## Calendar Access
 
 ### List Upcoming Events
@@ -125,7 +141,32 @@ bun run calendar.ts search --query "team standup"
 ### Date Formats
 
 - **Relative**: `today`, `tomorrow`, `+7d`, `+1m`, `+1y`
-- **Absolute**: ISO format `2024-01-15`
+- **Absolute**: ISO format `2024-01-15` or `2024-01-15T14:00:00`
+
+### Create Calendar Event
+
+```bash
+# Basic event (1 hour default duration)
+bun run calendar.ts create --subject "Team Meeting" --start "2024-01-15T14:00:00"
+
+# Event with end time
+bun run calendar.ts create --subject "Workshop" --start "2024-01-15T09:00:00" --end "2024-01-15T12:00:00"
+
+# Event with location and description
+bun run calendar.ts create --subject "Lunch" --start "2024-01-15T12:00:00" --location "Cafe" --body "Team lunch"
+
+# Event with attendees
+bun run calendar.ts create --subject "1:1" --start tomorrow --end +1d --attendees "colleague@example.com"
+
+# Multiple attendees
+bun run calendar.ts create --subject "Review" --start "2024-01-15T10:00:00" --attendees "a@ex.com,b@ex.com,c@ex.com"
+
+# All-day event
+bun run calendar.ts create --subject "Holiday" --start "2024-12-25" --all-day
+
+# Using relative dates
+bun run calendar.ts create --subject "Follow-up" --start tomorrow --end +1d
+```
 
 ## Multi-Profile Support
 
@@ -172,8 +213,8 @@ Credentials are stored at `~/.config/api-skills/credentials.json`.
 
 | Script | Purpose |
 |--------|---------|
-| `emails.ts` | Email list, read, search, and folder operations |
-| `calendar.ts` | Calendar view and search operations |
+| `emails.ts` | Email list, read, search, send, and folder operations |
+| `calendar.ts` | Calendar view, search, and create operations |
 | `auth.ts` | Manual credential management (list, delete profiles) |
 
 ## Additional Resources
